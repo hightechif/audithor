@@ -1,0 +1,32 @@
+{
+  "updated": "2026-11-01",
+  "outdated": [
+    { "coordinate": "com.squareup.okhttp3:okhttp", "minimumRecommended": "4.12.0", "note": "OkHttp 3.x is end-of-life; 4.x receives fixes" },
+    { "coordinate": "com.squareup.retrofit2:retrofit", "minimumRecommended": "2.9.0", "note": "older Retrofit pulls in old OkHttp" },
+    { "coordinate": "com.google.code.gson:gson", "minimumRecommended": "2.10.1", "note": "older Gson has deserialization DoS issues" },
+    { "coordinate": "androidx.webkit:webkit", "minimumRecommended": "1.8.0", "note": "newer WebView safety APIs" },
+    { "coordinate": "androidx.security:security-crypto", "minimumRecommended": "1.1.0-alpha06", "note": "bug fixes for EncryptedSharedPreferences" },
+    { "coordinate": "com.google.firebase:firebase-common", "minimumRecommended": "20.0.0", "note": "legacy Firebase SDK line" },
+    { "coordinate": "com.google.android.gms:play-services-basement", "minimumRecommended": "18.0.0", "note": "legacy Play Services line" },
+    { "coordinate": "org.jetbrains.kotlin:kotlin-stdlib", "minimumRecommended": "1.9.0", "note": "outdated Kotlin runtime" },
+    { "coordinate": "com.squareup.okio:okio", "minimumRecommended": "3.4.0", "note": "GzipSource fix (CVE-2023-3635)" }
+  ],
+  "vulnerabilities": [
+    { "coordinate": "com.squareup.okhttp3:okhttp", "id": "CVE-2021-0341", "fixed": "4.9.2", "severity": "high",
+      "summary": "OkHttp's hostname verifier could accept certificates for the wrong host when non-ASCII characters are present (improper certificate validation)." },
+    { "coordinate": "com.google.code.gson:gson", "id": "CVE-2022-25647", "fixed": "2.8.9", "severity": "high",
+      "summary": "Deserialization of untrusted data in Gson's writeReplace() can lead to denial of service." },
+    { "coordinate": "com.fasterxml.jackson.core:jackson-databind", "id": "CVE-2022-42003", "fixed": "2.12.7.1", "severity": "high",
+      "summary": "Resource exhaustion due to deep wrapper array nesting when UNWRAP_SINGLE_VALUE_ARRAYS is enabled." },
+    { "coordinate": "com.google.protobuf:protobuf-javalite", "id": "CVE-2022-3171", "fixed": "3.16.3", "severity": "medium",
+      "summary": "Parsing issue in protobuf-java core and lite can lead to denial of service via crafted input." },
+    { "coordinate": "com.google.protobuf:protobuf-java", "id": "CVE-2022-3171", "fixed": "3.16.3", "severity": "medium",
+      "summary": "Parsing issue in protobuf-java core and lite can lead to denial of service via crafted input." },
+    { "coordinate": "org.apache.commons:commons-text", "id": "CVE-2022-42889", "introduced": "1.5", "fixed": "1.10.0", "severity": "critical",
+      "summary": "\"Text4Shell\": variable interpolation in StringSubstitutor can lead to remote code execution with untrusted input." },
+    { "coordinate": "org.bouncycastle:bcprov", "id": "CVE-2020-28052", "introduced": "1.65", "fixed": "1.67", "severity": "high",
+      "summary": "OpenBSDBCrypt.checkPassword logic flaw allows bypassing bcrypt password verification." },
+    { "coordinate": "com.squareup.okio:okio", "id": "CVE-2023-3635", "introduced": "2.0.0", "fixed": "3.4.0", "severity": "medium",
+      "summary": "GzipSource does not handle exceptions on malformed gzip buffers, which may lead to denial of service." }
+  ]
+}

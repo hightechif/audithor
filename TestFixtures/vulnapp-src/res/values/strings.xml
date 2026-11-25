@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AudiThor Fixture</string>
+    <string name="google_api_key">AIzaSyA1b2C3d4E5f6G7h8I9j0KlMnOpQrStUvW</string>
+    <string name="backend_url">http://api.insecure-fixture.test/v1</string>
+</resources>
