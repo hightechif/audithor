@@ -3,6 +3,8 @@
 # Usage: regression-check.sh [--no-build] [--update]
 # Exit: 0 pass, 1 missing rule IDs, 2 inconclusive (build/scan/report problem).
 set -euo pipefail
+# Byte-order everywhere so sort, comm and the Python output agree in any locale.
+export LC_ALL=C
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APK="$REPO/TestFixtures/vulnapp.apk"
@@ -25,7 +27,7 @@ if [ "$build" = 1 ]; then
   out="$(cd "$REPO" && xcodebuild -scheme AudiThor -configuration Debug -destination 'platform=macOS' \
     -derivedDataPath build/dd build 2>&1 || true)"
   echo "$out" | grep -E 'error:|\*\* BUILD' | sort -u || true
-  echo "$out" | grep -q '\*\* BUILD SUCCEEDED \*\*' || err "build failed"
+  grep -q '\*\* BUILD SUCCEEDED \*\*' <<<"$out" || err "build failed"
 fi
 [ -x "$BIN" ] || err "binary not found at $BIN (run without --no-build)"
 [ -f "$APK" ] || err "fixture missing: $APK"
@@ -41,9 +43,9 @@ HOME="$tmp" CFFIXED_USER_HOME="$tmp" "$BIN" --scan "$APK" --out "$REPORT" --form
 
 actual="$(/usr/bin/python3 -I -c '
 import json, sys
-for r in sorted({f["ruleID"] for f in json.load(open(sys.argv[1]))["scan"]["findings"]}):
+for r in {f["ruleID"] for f in json.load(open(sys.argv[1]))["scan"]["findings"]}:
     print(r)
-' "$REPORT")" || err "could not parse $REPORT"
+' "$REPORT" | sort -u)" || err "could not parse $REPORT"
 [ -n "$actual" ] || err "scan returned zero findings ($REPORT)"
 
 if [ "$update" = 1 ]; then
