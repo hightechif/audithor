@@ -1,0 +1,147 @@
+#!/bin/bash
+# AudiThor verification harness. Every run gets its own throwaway HOME so it never
+# touches the user's real scan history, caches, or preferences. Evidence goes to
+# build/verify-evidence/<run-id>/ and survives cleanup.
+set -uo pipefail
+
+REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
+APP="$REPO/build/dd/Build/Products/Debug/AudiThor.app"
+BIN="$APP/Contents/MacOS/AudiThor"
+BUNDLE_ID="devplaceholder.FSN7ABQK.AudiThor"
+RUN_ID="${AUDITHOR_RUN_ID:-}"
+RUNS_ROOT="${TMPDIR:-/tmp}/audithor-verify"
+
+die() { echo "error: $*" >&2; exit 1; }
+need_run() { [ -n "$RUN_ID" ] || die "set AUDITHOR_RUN_ID (from: audithor-verify new-run)"; }
+run_home() { echo "$RUNS_ROOT/$RUN_ID/home"; }
+evidence() { echo "$REPO/build/verify-evidence/$RUN_ID"; }
+iso_env() { echo "HOME=$(run_home) CFFIXED_USER_HOME=$(run_home)"; }
+
+usage() {
+  cat <<'U'
+usage: audithor-verify <command> [args]
+  new-run                     create an isolated run; prints `export AUDITHOR_RUN_ID=...`
+  build                       build the Debug app (xcodebuild), print binary path
+  doctor                      read-only health check of the build, tools, and this run
+  scan <apk> <name> [args…]   headless scan; saves report + stdout/stderr/exit as evidence
+                              <name> is the evidence prefix; extra args go to the CLI
+                              (e.g. --out-format pdf, --fail-on high, --save, --cve local)
+  assert-rules <name> RULE…   require these rule IDs in evidence <name>.json
+  history                     list scans saved in this run's isolated history DB
+  gui-launch                  start the GUI against this run's isolated HOME (notice pre-accepted)
+  gui-stop                    stop the GUI instance this run started
+  cleanup                     stop our GUI, delete the run's HOME; evidence is kept
+U
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+new-run)
+  id="$(date +%Y%m%d-%H%M%S)-$$"
+  mkdir -p "$RUNS_ROOT/$id/home" "$REPO/build/verify-evidence/$id"
+  echo "export AUDITHOR_RUN_ID=$id"
+  ;;
+build)
+  cd "$REPO" && xcodebuild -scheme AudiThor -configuration Debug -destination 'platform=macOS' \
+    -derivedDataPath build/dd build 2>&1 | grep -E '^/.*error:|\*\* BUILD' | tail -20
+  [ -x "$BIN" ] || die "build produced no binary at $BIN"
+  echo "binary: $BIN"
+  ;;
+doctor)
+  ok=1
+  if [ -x "$BIN" ]; then
+    newest_src="$(find "$REPO/AudiThor" -name '*.swift' -newer "$BIN" | head -1)"
+    if [ -n "$newest_src" ]; then echo "STALE  binary is older than $newest_src — run: audithor-verify build"; ok=0
+    else echo "OK     binary up to date: $BIN"; fi
+  else echo "FAIL   no binary — run: audithor-verify build"; ok=0; fi
+  echo "INFO   git: $(cd "$REPO" && git rev-parse --short HEAD)$(cd "$REPO" && git diff --quiet || echo ' (dirty)')"
+  # Mirror the app's own search order (AudiThor/Tools/ToolLocator.swift candidateDirectories),
+  # not just PATH: the app also looks in JVM homes and Android SDK build-tools (newest first).
+  search="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/opt/openjdk/bin:/usr/local/opt/openjdk/bin"
+  for j in $(ls -r /Library/Java/JavaVirtualMachines 2>/dev/null); do search="$search:/Library/Java/JavaVirtualMachines/$j/Contents/Home/bin"; done
+  for root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Library/Android/sdk" /opt/homebrew/share/android-commandlinetools /usr/local/share/android-commandlinetools; do
+    [ -n "$root" ] && [ -d "$root/build-tools" ] || continue
+    for v in $(ls -r "$root/build-tools"); do search="$search:$root/build-tools/$v"; done
+  done
+  for t in java apktool unzip jadx apksigner aapt2; do
+    p="$(PATH="$search:$PATH" command -v $t || true)"
+    case $t in java|apktool|unzip) req=required;; *) req=optional;; esac
+    if [ -n "$p" ]; then echo "OK     $t ($req): $p"
+    elif [ $req = required ]; then echo "FAIL   $t (required) missing"; ok=0
+    else echo "WARN   $t (optional) missing — related checks degrade"; fi
+  done
+  [ -f "$REPO/TestFixtures/vulnapp.apk" ] && echo "OK     fixture: TestFixtures/vulnapp.apk" || { echo "FAIL   fixture missing — run Scripts/build-fixture.sh"; ok=0; }
+  if [ -n "$RUN_ID" ]; then
+    [ -d "$(run_home)" ] && echo "OK     run $RUN_ID home: $(run_home)" || { echo "FAIL   run home missing: $(run_home)"; ok=0; }
+    pidf="$RUNS_ROOT/$RUN_ID/gui.pid"
+    if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then echo "OK     GUI pid $(cat "$pidf") (ours)"; else echo "INFO   no GUI running for this run"; fi
+  else echo "INFO   no AUDITHOR_RUN_ID set"; fi
+  others="$(pgrep -f "$BIN" | grep -v -x "$(cat "$RUNS_ROOT/$RUN_ID/gui.pid" 2>/dev/null || echo none)" || true)"
+  [ -n "$others" ] && echo "WARN   other AudiThor instances running (not ours, do not drive): $others"
+  [ $ok = 1 ] && echo "DOCTOR OK" || { echo "DOCTOR FAIL"; exit 1; }
+  ;;
+scan)
+  need_run; apk="${1:-}"; name="${2:-}"; shift 2 || die "usage: scan <apk> <name> [args]"
+  [ -f "$apk" ] || die "no such apk: $apk"
+  fmt=json; extra=()
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "--out-format" ]; then fmt="$2"; shift 2; else extra+=("$1"); shift; fi
+  done
+  ev="$(evidence)"; mkdir -p "$ev"
+  out="$ev/$name.$fmt"
+  echo "\$ HOME=$(run_home) CFFIXED_USER_HOME=$(run_home) $BIN --scan $apk --out $out --format $fmt ${extra[*]:-}" > "$ev/$name.cmd.txt"
+  env HOME="$(run_home)" CFFIXED_USER_HOME="$(run_home)" \
+    "$BIN" --scan "$apk" --out "$out" --format "$fmt" ${extra[@]+"${extra[@]}"} \
+    > "$ev/$name.stdout.txt" 2> "$ev/$name.stderr.txt"
+  code=$?
+  echo "$code" > "$ev/$name.exit.txt"
+  echo "exit=$code report=$out"
+  tail -1 "$ev/$name.stderr.txt"
+  exit $code
+  ;;
+assert-rules)
+  need_run; name="${1:-}"; shift || die "usage: assert-rules <name> RULE..."
+  /usr/bin/python3 -I - "$(evidence)/$name.json" "$@" <<'PY'
+import json, sys
+path, wanted = sys.argv[1], sys.argv[2:]
+scan = json.load(open(path))["scan"]
+have = {f["ruleID"] for f in scan["findings"]}
+missing = [r for r in wanted if r not in have]
+print(f"findings={len(scan['findings'])} risk={scan['riskScore']} package={scan['app']['packageName']}")
+for r in wanted: print(("OK     " if r in have else "MISSING ") + r)
+sys.exit(1 if missing else 0)
+PY
+  ;;
+history)
+  need_run; db="$(run_home)/Library/Application Support/AudiThor/history.sqlite"
+  [ -f "$db" ] || die "no history DB in this run yet ($db) — scan with --save first"
+  sqlite3 -readonly -header -column "$db" "select id, packageName, versionName, riskScore, findingCount, startedAt from scan order by startedAt desc;"
+  ;;
+gui-launch)
+  need_run; pidf="$RUNS_ROOT/$RUN_ID/gui.pid"
+  if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then echo "already running: pid $(cat "$pidf")"; exit 0; fi
+  env HOME="$(run_home)" CFFIXED_USER_HOME="$(run_home)" \
+    "$BIN" -acceptedAuthorizedUseNotice.v1 YES > "$RUNS_ROOT/$RUN_ID/gui.log" 2>&1 &
+  echo $! > "$pidf"
+  for _ in $(seq 1 40); do
+    if ! kill -0 "$(cat "$pidf")" 2>/dev/null; then die "GUI exited early; see $RUNS_ROOT/$RUN_ID/gui.log"; fi
+    if lsappinfo info -only pid "$(cat "$pidf")" 2>/dev/null | grep -q pid; then
+      echo "GUI ready: pid $(cat "$pidf") (bundle $BUNDLE_ID) home $(run_home)"; exit 0; fi
+    sleep 0.25
+  done
+  die "GUI did not register with LaunchServices within 10s"
+  ;;
+gui-stop)
+  need_run; pidf="$RUNS_ROOT/$RUN_ID/gui.pid"
+  if [ -f "$pidf" ]; then kill "$(cat "$pidf")" 2>/dev/null && echo "stopped pid $(cat "$pidf")"; rm -f "$pidf"; else echo "no GUI started by this run"; fi
+  ;;
+cleanup)
+  need_run
+  "$0" gui-stop >/dev/null 2>&1 || true
+  rm -rf "$RUNS_ROOT/$RUN_ID"
+  echo "removed $RUNS_ROOT/$RUN_ID; evidence kept at $(evidence)"
+  ls "$(evidence)" 2>/dev/null | sed 's/^/  /'
+  ;;
+""|-h|--help) usage ;;
+*) usage; exit 1 ;;
+esac
